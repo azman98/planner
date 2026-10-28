@@ -31,6 +31,17 @@ Start time, duration and priority are stored on the last line of the task's note
 4. Put the client ID in `config.js`
 5. GitHub Pages: Settings → Pages → Deploy from branch `main`, folder `/ (root)`
 
+## Deploying an update
+
+1. Make the change
+2. In `sw.js`, bump `VERSION` (`planner-v2` → `planner-v3`)
+3. In `changelog.js`, add an entry on top with the same number and a few plain-language lines
+4. If you added a file, add it to `SHELL` in `sw.js`
+5. Run `node test.js`; it checks all of the above and the quick-add parser
+6. Merge to `main`; GitHub Pages publishes within a minute or two
+
+Installed apps check for a new version every 10 minutes and whenever they come back to the front. They reload on their own when you return to the app, but never while you're typing, have a sheet open or a change is still syncing. Until then you'll see "A new version is ready". After the reload, a short note says what changed; the full list is in Settings → What's new.
+
 ## Install
 
 - **iPhone:** open the site in Safari → Share → Add to Home Screen
@@ -40,5 +51,8 @@ Start time, duration and priority are stored on the last line of the task's note
 
 - `index.html`, `styles.css`, `app.js`: the app
 - `config.js`: client ID and list names
+- `changelog.js`: "What's new" entries, one per deploy
+- `test.js`: checks to run before each deploy (`node test.js`)
 - `sw.js`: service worker for offline use
 - `manifest.webmanifest`, `icons/`: install metadata
+- `ROADMAP.md`: what's next for the app itself
