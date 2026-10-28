@@ -12,6 +12,8 @@ const CAL = "https://www.googleapis.com/calendar/v3";
 const DOW = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
 const MON = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
 const REDIRECT = location.origin + location.pathname.replace(/index\.html$/, "");
+const CHANGELOG = window.PLANNER_CHANGELOG || [];
+const APP_V = CHANGELOG.length ? CHANGELOG[0].v : 0;
 
 /* ---------- small utils ---------- */
 const $ = s => document.querySelector(s);
@@ -489,6 +491,8 @@ function renderBanner() {
   if (state.authProblem === "expired") h = `<div class="banner">Your Google session expired. Changes are saved on this device until you reconnect. <button class="btn mini primary" type="button" data-act="reconnect">Reconnect</button></div>`;
   else if (state.authProblem === "api") h = `<div class="banner">Google says an API isn't enabled for this app yet. Enable both Google Tasks API and Google Calendar API in Google Cloud, then refresh.</div>`;
   else if (state.authProblem === "forbidden") h = `<div class="banner">Google refused access (${esc(state.authDetail || "403")}). Sign out and sign in again, and allow both Tasks and Calendar. <button class="btn mini" type="button" data-act="reconnect">Sign in again</button></div>`;
+  if (updateReady) h += `<div class="banner">A new version is ready. <button class="btn mini primary" type="button" data-act="reload">Update now</button></div>`;
+  else if (isIOS && !standalone() && !ls.get("pl.installHint", false)) h += `<div class="banner"><span>For the app version on iPhone: tap Share, then <b>Add to Home Screen</b>, and open Planner from the icon.</span><button class="btn mini" type="button" data-act="hideinstall">Got it</button></div>`;
   $("#banner").innerHTML = h;
 }
 function renderChrome() {
@@ -545,6 +549,7 @@ function openSettings() {
     <h2 id="stH">Settings</h2>
     <div><p class="sec-h">Weekly targets (hours)</p><div class="tgts">${AKEYS.map(a => `<label class="fld" data-c="${a}"><span style="display:flex;gap:6px;align-items:center"><span class="dot"></span>${AREAS[a].label}</span><input type="number" inputmode="numeric" min="0" max="100" id="tg-${a}" value="${settings.targets[a]}"></label>`).join("")}</div></div>
     <div><p class="sec-h">Calendars</p><p class="hint" style="margin:0 0 8px">Assign a calendar to an area to count its events toward that area's hours. "Show only" displays events without counting them.</p><div style="display:flex;flex-direction:column;gap:8px">${cals}</div></div>
+    <div><p class="sec-h">What's new · version ${APP_V}</p>${CHANGELOG.slice(0, 5).map(c => `<p class="hint" style="margin:0 0 6px"><b>v${c.v}</b> · ${esc(c.date)}<br>${c.items.map(esc).join("<br>")}</p>`).join("")}</div>
     <div><p class="sec-h">Install</p><p class="hint" style="margin:0">iPhone: Safari → Share → Add to Home Screen. Mac: Safari → File → Add to Dock, or Chrome → ⋮ → Cast, save and share → Install page as app.</p></div>
     <div class="ed-act"><button class="btn primary" type="submit">Save</button><button class="btn" type="button" data-act="cancel">Cancel</button><span class="spacer"></span><button class="btn danger" type="button" data-act="signout">Sign out</button></div>
   </form></div>`;
@@ -552,12 +557,38 @@ function openSettings() {
 
 /* ---------- toast ---------- */
 let toastT;
-function toast(msg, undo) {
+function toast(msg, undo, ms = 5000) {
   clearTimeout(toastT);
   $("#toastHost").innerHTML = `<div class="toast" role="status"><span>${esc(msg)}</span>${undo ? '<button type="button" data-act="undo">Undo</button>' : ""}</div>`;
   state.undo = undo || null;
-  toastT = setTimeout(() => { $("#toastHost").innerHTML = ""; state.undo = null; }, 5000);
+  toastT = setTimeout(() => { $("#toastHost").innerHTML = ""; state.undo = null; }, ms);
 }
+
+/* ---------- updates: detect a new deploy, reload when it's safe ---------- */
+let updateReady = false, lastCheck = 0, shownAt = 0;
+async function checkUpdate() {
+  if (!navigator.onLine || Date.now() - lastCheck < 60000) return;
+  lastCheck = Date.now();
+  try {
+    const m = (await (await fetch("sw.js?check=" + Date.now(), { cache: "no-store" })).text()).match(/VERSION = "planner-v(\d+)"/);
+    if (!m || +m[1] === APP_V) return;
+    updateReady = true;
+    if (Date.now() - shownAt < 5000 && applyUpdate()) return; // found right as the user came back: reload now
+    if (navigator.serviceWorker) navigator.serviceWorker.getRegistration().then(r => r && r.update()).catch(() => {});
+    renderBanner();
+  } catch {}
+}
+// Never reload while the user is typing, has a sheet open, or a change is on its way to Google (a reload mid-request could create a task twice).
+const busy = () => !!$("#modal").innerHTML || !!flushing || !!$("#qaInput").value.trim() || /INPUT|TEXTAREA|SELECT/.test((document.activeElement || {}).tagName || "");
+function applyUpdate() { if (!updateReady || busy()) return false; location.reload(); return true; }
+function showWhatsNew() {
+  const seen = ls.get("pl.seenV", ls.get("pl.authed", false) ? 1 : 0); // v1 had no version stamp
+  ls.set("pl.seenV", APP_V);
+  const fresh = CHANGELOG.filter(c => c.v > seen);
+  if (seen && fresh.length) toast(`Updated: ${fresh[0].items[0]}${fresh.length > 1 || fresh[0].items.length > 1 ? " (more in Settings → What's new)" : ""}`, null, 8000);
+}
+const isIOS = /iPhone|iPad|iPod/.test(navigator.userAgent) || (/Macintosh/.test(navigator.userAgent) && navigator.maxTouchPoints > 1);
+const standalone = () => matchMedia("(display-mode: standalone)").matches || navigator.standalone === true;
 
 /* ---------- events ---------- */
 function updateParse() {
@@ -589,6 +620,8 @@ function bindEvents() {
     if (a === "ovclose" && e.target === act) { closeModal(); return; }
     if (a === "cancel") { closeModal(); return; }
     if (a === "signout") { signOut(); return; }
+    if (a === "reload") { if (!flushing) location.reload(); return; }
+    if (a === "hideinstall") { ls.set("pl.installHint", true); renderBanner(); return; }
     if (a === "reconnect") { authRedirect(state.authProblem === "expired" && canSilent()); return; }
     if (a === "del") {
       if (!state.delArm) { state.delArm = true; act.textContent = "Confirm delete"; return; }
@@ -635,10 +668,17 @@ function bindEvents() {
   window.addEventListener("offline", () => { state.online = false; renderSync(); });
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState !== "visible") return;
+    if (applyUpdate()) return;
+    shownAt = Date.now(); checkUpdate();
     if (!tokenValid() && canSilent() && !state.editing) { authRedirect(true); return; }
-    if (Date.now() - state.lastPull > 120000) sync(false); else render();
+    if (Date.now() - state.lastPull > 120000) sync(false); else { render(); flush(); }
   });
-  setInterval(() => { if (document.visibilityState === "visible" && !$("#modal").innerHTML) { if (Date.now() - state.lastPull > 300000) sync(false); else if (state.view === "today") render(); } }, 60000);
+  setInterval(() => {
+    if (document.visibilityState !== "visible") return;
+    if (Date.now() - lastCheck > 600000) checkUpdate();
+    if ($("#modal").innerHTML) return;
+    if (Date.now() - state.lastPull > 300000) sync(false); else if (state.view === "today") render();
+  }, 60000);
 }
 function route() {
   const h = (location.hash || "").slice(1);
@@ -663,8 +703,9 @@ function boot() {
     if (!ls.get("pl.authed", false)) { showGate(); return; }
     state.authProblem = navigator.onLine ? "expired" : null;
   }
-  showApp(); route();
+  showApp(); route(); showWhatsNew();
   if (tokenValid()) sync(!state.lists.work);
+  setTimeout(checkUpdate, 3000);
 }
 if ("serviceWorker" in navigator && location.protocol === "https:") navigator.serviceWorker.register("sw.js").catch(() => {});
 boot();
